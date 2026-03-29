@@ -1,44 +1,60 @@
 import argparse
 import random
 import sys
+from dataclasses import dataclass
 
 from validator import validate
 
 
-# 这里的宽高只表示内部可生成区域，不包含外围边界。
-grid_width = 30
-grid_height = 30
-border_size = 10
-wall_probability = 0.5
-simulation_steps = 2
-neighbor_threshold = 5
-max_attempts = 50
+@dataclass(frozen = True)
+class level_generator_profile :
+    name : str
+    grid_width : int
+    grid_height : int
+    border_size : int
+    wall_probability : float
+    simulation_steps : int
+    neighbor_threshold : int
+    max_attempts : int
 
 
-def final_grid_width() :
-    return grid_width + border_size * 2
+# 当前这套“随机初始 + 元胞自动机平滑 + 最终封边”的方案命名为“平坦随机”。
+flat_random_profile = level_generator_profile(
+    name = "平坦随机",
+    grid_width = 30,
+    grid_height = 30,
+    border_size = 10,
+    wall_probability = 0.5,
+    simulation_steps = 2,
+    neighbor_threshold = 5,
+    max_attempts = 50,
+)
 
 
-def final_grid_height() :
-    return grid_height + border_size * 2
+def final_grid_width(profile) :
+    return profile.grid_width + profile.border_size * 2
 
 
-def create_initial_grid(rng) :
+def final_grid_height(profile) :
+    return profile.grid_height + profile.border_size * 2
+
+
+def create_initial_grid(rng, profile) :
     # 先生成内部区域，边界稍后再统一补上。
     grid = []
 
-    for _ in range(grid_height) :
+    for _ in range(profile.grid_height) :
         row = []
 
-        for _ in range(grid_width) :
-            row.append(rng.random() < wall_probability)
+        for _ in range(profile.grid_width) :
+            row.append(rng.random() < profile.wall_probability)
 
         grid.append(row)
 
     return grid
 
 
-def count_wall_neighbors(grid, x, y) :
+def count_wall_neighbors(grid, x, y, profile) :
     # 统计八邻域中的墙体数量，越靠近密集区域越容易在后续迭代中变成墙。
     wall_count = 0
 
@@ -52,8 +68,8 @@ def count_wall_neighbors(grid, x, y) :
             is_out_of_bounds = (
                 neighbor_x < 0 or
                 neighbor_y < 0 or
-                neighbor_x >= grid_width or
-                neighbor_y >= grid_height
+                neighbor_x >= profile.grid_width or
+                neighbor_y >= profile.grid_height
             )
 
             if is_out_of_bounds or grid[neighbor_y][neighbor_x] :
@@ -62,43 +78,43 @@ def count_wall_neighbors(grid, x, y) :
     return wall_count
 
 
-def run_cellular_automata(grid) :
+def run_cellular_automata(grid, profile) :
     # 按元胞自动机规则生成下一轮地图。
     next_grid = []
 
-    for y in range(grid_height) :
+    for y in range(profile.grid_height) :
         next_row = []
 
-        for x in range(grid_width) :
-            wall_count = count_wall_neighbors(grid, x, y)
-            next_row.append(wall_count >= neighbor_threshold)
+        for x in range(profile.grid_width) :
+            wall_count = count_wall_neighbors(grid, x, y, profile)
+            next_row.append(wall_count >= profile.neighbor_threshold)
 
         next_grid.append(next_row)
 
     return next_grid
 
 
-def apply_border_walls(grid) :
+def apply_border_walls(grid, profile) :
     # 在地图生成完成后统一填充边界，强保证外围一定是墙。
     bordered_grid = []
 
-    for y in range(final_grid_height()) :
+    for y in range(final_grid_height(profile)) :
         bordered_row = []
 
-        for x in range(final_grid_width()) :
+        for x in range(final_grid_width(profile)) :
             is_border = (
-                x < border_size or
-                y < border_size or
-                x >= final_grid_width() - border_size or
-                y >= final_grid_height() - border_size
+                x < profile.border_size or
+                y < profile.border_size or
+                x >= final_grid_width(profile) - profile.border_size or
+                y >= final_grid_height(profile) - profile.border_size
             )
 
             if is_border :
                 bordered_row.append(True)
                 continue
 
-            inner_x = x - border_size
-            inner_y = y - border_size
+            inner_x = x - profile.border_size
+            inner_y = y - profile.border_size
             bordered_row.append(grid[inner_y][inner_x])
 
         bordered_grid.append(bordered_row)
@@ -106,15 +122,15 @@ def apply_border_walls(grid) :
     return bordered_grid
 
 
-def build_level(level_no = 1, seed = None) :
+def build_level(level_no = 1, seed = None, profile = flat_random_profile) :
     # 先随机初始化，再多轮平滑，最后统一封边。
     rng = random.Random(seed)
-    grid = create_initial_grid(rng)
+    grid = create_initial_grid(rng, profile)
 
-    for _ in range(simulation_steps) :
-        grid = run_cellular_automata(grid)
+    for _ in range(profile.simulation_steps) :
+        grid = run_cellular_automata(grid, profile)
 
-    grid = apply_border_walls(grid)
+    grid = apply_border_walls(grid, profile)
 
     return {
         "level_no" : level_no,
@@ -122,19 +138,18 @@ def build_level(level_no = 1, seed = None) :
     }
 
 
-def generate_level(level_no = 1, seed = None) :
+def generate_level(level_no = 1, seed = None, profile = flat_random_profile) :
     # 如果出现孔洞或分离区域，就继续尝试下一张地图。
     seed_rng = random.Random(seed)
 
-    for _ in range(max_attempts) :
+    for _ in range(profile.max_attempts) :
         current_seed = None if seed is None else seed_rng.randrange(0, 2**31)
-        level = build_level(level_no = level_no, seed = current_seed)
+        level = build_level(level_no = level_no, seed = current_seed, profile = profile)
 
         if validate(level) :
             return level
 
-    print("failed to generate a valid connected level")
-    return level
+    raise RuntimeError(f"failed to generate a valid connected level with profile: {profile.name}")
 
 
 def render_grid(grid) :
@@ -159,7 +174,8 @@ def main() :
         sys.stdout.reconfigure(encoding = "utf-8")
 
     args = parse_args()
-    level = generate_level(level_no = args.level_no, seed = args.seed)
+    level = generate_level(level_no = args.level_no, seed = args.seed, profile = flat_random_profile)
+    print(f"生成方式 : {flat_random_profile.name}")
     print(render_grid(level["grid"]))
 
 
